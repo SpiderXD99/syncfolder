@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="it"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>syncfolder</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1c1f24;--muted:#6b7280;--line:#e3e6ea;
+--accent:#2563eb;--accent-fg:#fff;--ok:#15803d;--err:#b91c1c;--warn:#a16207;--log:#0f172a;--log-fg:#cbd5e1}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a20;--fg:#e6e8eb;
+--muted:#9aa3af;--line:#2a2f37;--accent:#3b82f6;--log:#0a0c10;--log-fg:#b6c2d1;--ok:#4ade80;--err:#f87171;--warn:#facc15}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:760px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+.card h2{font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:0 0 12px}
+.row{display:flex;gap:8px;align-items:center}
+input[type=password],input[type=number]{flex:1;width:100%;padding:9px 11px;border:1px solid var(--line);
+border-radius:8px;background:var(--bg);color:var(--fg);font:inherit;min-width:0}
+button{font:inherit;padding:9px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer;white-space:nowrap}
+button:hover{border-color:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.actions button{padding:14px 10px;font-size:15px}
+.actions small{display:block;font-size:12px;opacity:.75;margin-top:2px;white-space:normal}
+@media (max-width:560px){.actions{grid-template-columns:1fr}}
+.check{display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px}
+.status{margin-top:8px;font-size:14px;min-height:20px}
+.ok{color:var(--ok)}.err{color:var(--err)}.warn{color:var(--warn)}
+.folder{flex:1;min-width:0;padding:9px 11px;border:1px dashed var(--line);border-radius:8px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.folder.set{color:var(--fg);border-style:solid}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:12px}
+.bar>div{height:100%;width:0;background:var(--accent);transition:width .3s}
+#current{font-size:13px;color:var(--muted);margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:18px}
+pre{background:var(--log);color:var(--log-fg);border-radius:8px;padding:12px;height:240px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0;white-space:pre-wrap;word-break:break-all}
+.hidden{display:none}
+.note{font-size:14px;color:var(--muted);margin:0 0 12px}
+#failedList{list-style:none;margin:0 0 12px;padding:0;max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+#failedList li{padding:6px 10px;border-bottom:1px solid var(--line);font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+#failedList li span{color:var(--err);display:block}
+</style></head><body><main>
+<h1>syncfolder</h1>
+<p class="sub">Scambia i file tra una cartella di questo computer e il server.</p>
+
+<div class="card">
+  <h2>Accesso</h2>
+  <div class="row"><input type="password" id="token" placeholder="Token" autocomplete="current-password"><button id="saveToken">Entra</button></div>
+  <div class="status" id="connStatus"></div>
+</div>
+
+<div class="card" id="fullCard">
+  <h2>Cartella su questo computer</h2>
+  <div class="row"><div class="folder" id="folderName">Nessuna cartella scelta</div><button id="pick">Scegli cartella…</button></div>
+  <div class="status" id="folderStatus"></div>
+</div>
+
+<div class="card" id="actionsCard">
+  <h2>Azioni</h2>
+  <div class="actions">
+    <button class="primary" data-action="down">⬇ Scarica<small>dal server alla cartella</small></button>
+    <button class="primary" data-action="up">⬆ Carica<small>dalla cartella al server</small></button>
+    <button data-action="sync">⇅ Sincronizza<small>in entrambe le direzioni</small></button>
+  </div>
+  <label class="check"><input type="checkbox" id="mirror"> Specchio: elimina sulla destinazione i file che non ci sono nella sorgente</label>
+  <label class="check"><input type="checkbox" id="auto"> Sincronizza automaticamente ogni
+    <input type="number" id="interval" min="5" value="30" style="width:70px;flex:none"> secondi (con la pagina aperta)</label>
+  <div class="bar"><div id="barFill"></div></div>
+  <div id="current"></div>
+  <div class="status" id="jobStatus"></div>
+</div>
+
+<div class="card hidden" id="failedCard">
+  <h2>File con errori (<span id="failedCount">0</span>)</h2>
+  <p class="note">La sincronizzazione automatica li salta per non ripetere l'errore all'infinito.
+    I pulsanti Scarica / Carica / Sincronizza li riprovano.</p>
+  <ul id="failedList"></ul>
+  <div class="row"><button class="primary" id="retryFailed">Riprova ora</button><button id="clearFailed">Svuota lista</button></div>
+</div>
+
+<div class="card hidden" id="fallbackCard">
+  <h2>Trasferimento semplice</h2>
+  <p class="note">Questo browser non può scrivere direttamente in una cartella: per Scarica/Carica/Sincronizza usa Chrome o Edge. Qui puoi comunque:</p>
+  <div class="actions" style="grid-template-columns:repeat(2,1fr)">
+    <button class="primary" id="fbUpload">⬆ Carica una cartella<small>invia i file nuovi o modificati</small></button>
+    <button class="primary" id="fbZip">⬇ Scarica tutto (.zip)<small>tutti i file del server</small></button>
+  </div>
+  <input type="file" id="fbInput" webkitdirectory multiple class="hidden">
+  <div class="bar"><div id="fbBar"></div></div>
+  <div class="status" id="fbStatus"></div>
+</div>
+
+<div class="card">
+  <h2>Registro</h2>
+  <pre id="log"></pre>
+</div>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const CHUNK = 32 * 1024 * 1024;          // Cloudflare free: max 100 MB per richiesta
+const STATE = ".syncstate.json", CACHE = ".synccache.json";
+const IGNORED = new Set([STATE, CACHE, ".DS_Store", "Thumbs.db", "desktop.ini"]);
+const NAMES = {down: "Download", up: "Upload", sync: "Sincronizzazione"};
+const DONE = {down: "Download completato", up: "Upload completato", sync: "Sincronizzazione completata"};
+const STARTED = {down: "Download avviato", up: "Upload avviato", sync: "Sincronizzazione avviata"};
+const supported = "showDirectoryPicker" in window;
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const get = (o, k) => has(o, k) ? o[k] : undefined;
+let gitSkip = rel => false;  // regole .gitignore attive (locali + server)
+const ignored = rel => {
+  const n = rel.split("/").pop();
+  return IGNORED.has(n) || n.endsWith(".syncpart") || n.endsWith(".synctmp") || gitSkip(rel);
+};
+
+// ---------------------------------------------------------------- .gitignore
+// Stessa logica di gitignore_regex() / GitIgnore in syncfolder.py.
+const reEscape = c => c.replace(/[.*+?^${}()|[\]\\\/-]/g, "\\$&");
+function gitIgnoreRegex(pat) {
+  const anchored = pat.includes("/");     // con una '/' vale solo da quella cartella
+  pat = pat.replace(/^\/+/, "");
+  let out = "", i = 0;
+  const n = pat.length;
+  while (i < n) {
+    if (pat.startsWith("**", i) && (i === 0 || pat[i - 1] === "/")) {
+      if (i + 2 === n) { out += ".*"; i += 2; continue; }          // "dir/**"
+      if (pat[i + 2] === "/") { out += "(?:.*/)?"; i += 3; continue; }  // "**/"
+    }
+    const c = pat[i];
+    if (c === "*") {
+      out += "[^/]*";
+      while (i + 1 < n && pat[i + 1] === "*") i++;
+    } else if (c === "?") out += "[^/]";
+    else if (c === "[" && pat.indexOf("]", i + 2) !== -1) {
+      const j = pat.indexOf("]", i + 2);
+      let body = pat.slice(i + 1, j);
+      if ("!^".includes(body[0])) body = "^" + body.slice(1);
+      out += "[" + body.replace(/\\/g, "\\\\") + "]";
+      i = j;
+    } else if (c === "\\" && i + 1 < n) { i++; out += reEscape(pat[i]); }
+    else out += reEscape(c);
+    i++;
+  }
+  return new RegExp("^" + (anchored ? "" : "(?:.*/)?") + out + "$");
+}
+class GitIgnore {
+  constructor() { this.rules = new Map(); this.memo = new Map(); }  // cartella -> regole
+  add(base, text) {
+    const rules = [];
+    for (let line of text.split("\n")) {
+      line = line.replace(/\r$/, "");
+      if (!line.startsWith("\\ ")) line = line.replace(/ +$/, "");
+      if (!line || line.startsWith("#")) continue;
+      const negate = line.startsWith("!");
+      if (negate) line = line.slice(1);
+      else if (line.startsWith("\\#") || line.startsWith("\\!")) line = line.slice(1);
+      const dirOnly = line.endsWith("/");
+      line = line.replace(/\/+$/, "");
+      if (line) rules.push([gitIgnoreRegex(line), negate, dirOnly]);
+    }
+    this.rules.set(base, rules);
+    this.memo.clear();
+  }
+  match(rel, isDir) {
+    let result = false;
+    const depth = b => b ? b.split("/").length : 0;
+    for (const base of [...this.rules.keys()].sort((a, b) => depth(a) - depth(b))) {
+      if (base && !rel.startsWith(base + "/")) continue;
+      const sub = base ? rel.slice(base.length + 1) : rel;
+      for (const [re, negate, dirOnly] of this.rules.get(base))
+        if ((isDir || !dirOnly) && re.test(sub)) result = !negate;
+    }
+    return result;
+  }
+  // true se il path, o una cartella che lo contiene, e' escluso
+  ignored(rel, isDir = false) {
+    if (!this.rules.size) return false;
+    const key = rel + (isDir ? "/" : "");
+    if (!this.memo.has(key)) {
+      const parent = rel.slice(0, Math.max(0, rel.lastIndexOf("/")));
+      this.memo.set(key, (!!parent && this.ignored(parent, true)) || this.match(rel, isDir));
+    }
+    return this.memo.get(key);
+  }
+  static fromManifest(manifest) {
+    const gi = new GitIgnore();
+    for (const [rel, info] of Object.entries(manifest))
+      if (info.gitignore !== undefined) gi.add(rel.slice(0, Math.max(0, rel.lastIndexOf("/"))), info.gitignore);
+    return gi;
+  }
+}
+const store = {
+  get(k) { try { return localStorage.getItem("syncfolder-" + k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem("syncfolder-" + k, v); } catch {} },
+};
+
+let token = store.get("token") || "";
+// link di accesso "https://.../#token=...": il frammento non arriva mai al server
+function tokenFromLink() {
+  const m = location.hash.match(/(?:^#|&)token=([^&]+)/);
+  if (!m) return false;
+  token = decodeURIComponent(m[1]);
+  store.set("token", token);
+  history.replaceState(null, "", location.pathname + location.search);
+  return true;
+}
+tokenFromLink();
+// link incollato in una scheda gia' aperta: cambia solo il frammento, niente ricarica
+addEventListener("hashchange", () => {
+  if (tokenFromLink()) { $("token").value = token; checkConnection(); }
+});
+let dir = null;      // FileSystemDirectoryHandle della cartella scelta
+let cache = {};      // rel -> [size, lastModified, sha]
+let busy = false;
+let authFailed = false;  // token rifiutato: la sync automatica resta in pausa
+const TOKEN_HINT = "token non valido: il server è stato riavviato? Apri il nuovo link di accesso";
+let auto = false;    // true durante la sincronizzazione automatica
+let lastAction = "sync";
+// file che hanno dato errore: rel -> messaggio. La sync automatica li salta.
+let failed = {};
+try { failed = JSON.parse(store.get("failed") || "{}"); } catch {}
+
+function saveFailed() {
+  store.set("failed", JSON.stringify(failed));
+  const names = Object.keys(failed).sort();
+  $("failedCard").classList.toggle("hidden", !names.length);
+  $("failedCount").textContent = names.length;
+  $("failedList").replaceChildren(...names.map(rel => {
+    const li = document.createElement("li"), err = document.createElement("span");
+    li.textContent = rel; err.textContent = failed[rel]; li.appendChild(err);
+    return li;
+  }));
+}
+// esegue l'operazione su un file tenendo aggiornata la lista degli errori;
+// restituisce true se riuscita, false se fallita o saltata
+async function attempt(rel, fn) {
+  if (auto && has(failed, rel)) { skipped++; return false; }
+  try {
+    await fn();
+    if (has(failed, rel)) { delete failed[rel]; saveFailed(); }
+    return true;
+  } catch (e) {
+    if (e.message === "token errato") throw e;
+    log("errore su " + rel + ": " + e.message + (auto ? " (saltato nelle prossime sync automatiche)" : ""));
+    failed[rel] = e.message; saveFailed();
+    return false;
+  }
+}
+let skipped = 0;
+
+function log(msg) {
+  const el = $("log");
+  el.textContent += "[" + new Date().toLocaleTimeString() + "] " + msg + "\n";
+  el.scrollTop = el.scrollHeight;
+}
+function status(id, cls, text) { $(id).className = "status " + cls; $(id).textContent = text; }
+function progress(done, total, current) {
+  $("barFill").style.width = (total ? Math.round(100 * done / total) : 0) + "%";
+  $("current").textContent = current ? (total ? done + 1 + "/" + total + "  " : "") + current : "";
+}
+
+// ------------------------------------------------------------------ server API
+async function api(method, path, params, body) {
+  const url = path + (params ? "?" + new URLSearchParams(params) : "");
+  const r = await fetch(url, {method, body, headers: {Authorization: "Bearer " + token}});
+  if (r.status === 401) throw new Error("token errato");
+  if (!r.ok) {
+    let m = r.statusText;
+    try { m = (await r.json()).error || m; } catch {}
+    throw new Error("errore " + r.status + ": " + m);
+  }
+  return r;
+}
+const manifest = async () => (await api("GET", "/manifest")).json();
+
+async function push(rel, info) {
+  let off = 0;
+  do {
+    const chunk = info.file.slice(off, off + CHUNK);
+    await api("PUT", "/upload", {path: rel, offset: off}, chunk);
+    off += chunk.size;
+  } while (off < info.file.size);
+  await api("POST", "/commit", {path: rel, mtime: info.mtime, sha: info.sha});
+}
+
+// ---------------------------------------------------------------------- SHA-256
+const K = new Uint32Array([
+  0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+  0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+  0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+  0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+  0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+  0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+  0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+  0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+
+// SHA-256 incrementale: crypto.subtle vuole tutto il file in memoria,
+// questa versione serve per i file grandi.
+class Sha256 {
+  constructor() {
+    this.h = new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]);
+    this.buf = new Uint8Array(64); this.bl = 0; this.len = 0; this.w = new Uint32Array(64);
+  }
+  update(d) {
+    let i = 0;
+    this.len += d.length;
+    if (this.bl) {
+      const n = Math.min(64 - this.bl, d.length);
+      this.buf.set(d.subarray(0, n), this.bl); this.bl += n; i = n;
+      if (this.bl < 64) return;
+      this.block(this.buf, 0); this.bl = 0;
+    }
+    for (; i + 64 <= d.length; i += 64) this.block(d, i);
+    if (i < d.length) { this.buf.set(d.subarray(i)); this.bl = d.length - i; }
+  }
+  block(d, o) {
+    const w = this.w, h = this.h;
+    for (let t = 0; t < 16; t++) w[t] = (d[o+4*t] << 24) | (d[o+4*t+1] << 16) | (d[o+4*t+2] << 8) | d[o+4*t+3];
+    for (let t = 16; t < 64; t++) {
+      const a = w[t-15], b = w[t-2];
+      const s0 = ((a >>> 7) | (a << 25)) ^ ((a >>> 18) | (a << 14)) ^ (a >>> 3);
+      const s1 = ((b >>> 17) | (b << 15)) ^ ((b >>> 19) | (b << 13)) ^ (b >>> 10);
+      w[t] = (w[t-16] + s0 + w[t-7] + s1) | 0;
+    }
+    let A = h[0], B = h[1], C = h[2], D = h[3], E = h[4], F = h[5], G = h[6], H = h[7];
+    for (let t = 0; t < 64; t++) {
+      const S1 = ((E >>> 6) | (E << 26)) ^ ((E >>> 11) | (E << 21)) ^ ((E >>> 25) | (E << 7));
+      const t1 = (H + S1 + ((E & F) ^ (~E & G)) + K[t] + w[t]) | 0;
+      const S0 = ((A >>> 2) | (A << 30)) ^ ((A >>> 13) | (A << 19)) ^ ((A >>> 22) | (A << 10));
+      const t2 = (S0 + ((A & B) ^ (A & C) ^ (B & C))) | 0;
+      H = G; G = F; F = E; E = (D + t1) | 0; D = C; C = B; B = A; A = (t1 + t2) | 0;
+    }
+    h[0] += A; h[1] += B; h[2] += C; h[3] += D; h[4] += E; h[5] += F; h[6] += G; h[7] += H;
+  }
+  hex() {
+    const bits = this.len * 8, padLen = (this.bl < 56 ? 56 : 120) - this.bl;
+    const p = new Uint8Array(padLen + 8), v = new DataView(p.buffer);
+    p[0] = 0x80;
+    v.setUint32(padLen, Math.floor(bits / 2 ** 32)); v.setUint32(padLen + 4, bits >>> 0);
+    this.update(p);
+    return Array.from(this.h, x => x.toString(16).padStart(8, "0")).join("");
+  }
+}
+const toHex = buf => Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, "0")).join("");
+async function sha256(file) {
+  if (file.size <= 64 * 1024 * 1024) return toHex(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
+  const h = new Sha256(), step = 8 * 1024 * 1024;
+  for (let o = 0; o < file.size; o += step) h.update(new Uint8Array(await file.slice(o, o + step).arrayBuffer()));
+  return h.hex();
+}
+
+// ------------------------------------------------- cartella locale (File System Access)
+function idb(mode, fn) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("syncfolder", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("kv");
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const tx = req.result.transaction("kv", mode), r = fn(tx.objectStore("kv"));
+      tx.oncomplete = () => resolve(r.result);
+      tx.onerror = () => reject(tx.error);
+    };
+  });
+}
+
+async function ensurePermission(ask) {
+  if (!dir) throw new Error("scegli prima una cartella");
+  const opts = {mode: "readwrite"};
+  if (await dir.queryPermission(opts) === "granted") return true;
+  if (!ask) return false;
+  if (await dir.requestPermission(opts) !== "granted") throw new Error("permesso sulla cartella negato");
+  return true;
+}
+
+async function parentOf(rel, create) {
+  const parts = rel.split("/"), name = parts.pop();
+  let d = dir;
+  for (const p of parts) d = await d.getDirectoryHandle(p, {create});
+  return [d, name];
+}
+async function readJSON(name) {
+  try { return JSON.parse(await (await (await dir.getFileHandle(name)).getFile()).text()); }
+  catch { return {}; }
+}
+async function writeFile(rel, data) {
+  const [d, name] = await parentOf(rel, true);
+  const fh = await d.getFileHandle(name, {create: true});
+  const w = await fh.createWritable();      // scrive in un file temporaneo, atomico alla chiusura
+  if (data instanceof ReadableStream) await data.pipeTo(w);
+  else { await w.write(data); await w.close(); }
+  return fh;
+}
+async function pull(rel, target, sha) {
+  target = target || rel;
+  const r = await api("GET", "/file", {path: rel});
+  const f = await (await writeFile(target, r.body || new Blob([]))).getFile();
+  cache[target] = [f.size, f.lastModified, sha];   // evita di ricalcolare l'hash
+}
+async function removeLocal(rel) {
+  const parts = rel.split("/"), chain = [dir];
+  try {
+    for (const p of parts.slice(0, -1)) chain.push(await chain[chain.length - 1].getDirectoryHandle(p));
+    await chain[chain.length - 1].removeEntry(parts[parts.length - 1]);
+  } catch (e) { if (e.name !== "NotFoundError") throw e; }
+  delete cache[rel];
+  for (let i = chain.length - 1; i > 0; i--) {     // toglie le cartelle rimaste vuote
+    for await (const _ of chain[i].keys()) return;
+    await chain[i - 1].removeEntry(parts[i - 1]);
+  }
+}
+async function scanLocal(gi) {
+  const out = {}, seen = {};
+  async function walk(d, prefix) {
+    const entries = [];
+    for await (const e of d.entries()) entries.push(e);
+    const own = entries.find(([name, h]) => name === ".gitignore" && h.kind === "file");
+    if (own) gi.add(prefix.replace(/\/$/, ""), await (await own[1].getFile()).text());
+    for (const [name, h] of entries) {
+      const rel = prefix + name;
+      if (h.kind === "directory") {
+        if (!name.startsWith(".sync") && !gi.ignored(rel, true)) await walk(h, rel + "/");
+        continue;
+      }
+      if (ignored(rel) || gi.ignored(rel)) continue;
+      const f = await h.getFile();
+      let c = get(cache, rel);
+      if (!c || c[0] !== f.size || c[1] !== f.lastModified) {
+        progress(0, 0, "calcolo impronta: " + rel);
+        c = [f.size, f.lastModified, await sha256(f)];
+      }
+      seen[rel] = c;
+      out[rel] = {size: f.size, mtime: f.lastModified / 1000, sha: c[2], file: f};
+    }
+  }
+  await walk(dir, "");
+  cache = seen;
+  return out;
+}
+function conflictName(rel) {
+  const slash = rel.lastIndexOf("/"), dot = rel.lastIndexOf(".");
+  const [base, ext] = dot > slash + 1 ? [rel.slice(0, dot), rel.slice(dot)] : [rel, ""];
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  const stamp = d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+  return base + ".conflict-browser-" + stamp + ext;
+}
+
+// ------------------------------------------------------------------- operazioni
+async function oneWay(direction, mirror, local, remote, state) {
+  const [src, dst] = direction === "down" ? [remote, local] : [local, remote];
+  const todo = Object.keys(src).filter(r => src[r].sha !== get(dst, r)?.sha).sort();
+  const extra = mirror ? Object.keys(dst).filter(r => !has(src, r)).sort() : [];
+  const todoSet = new Set(todo);
+  for (const r of Object.keys(src)) if (!todoSet.has(r)) state[r] = src[r].sha;
+  const all = todo.concat(extra);
+  let ok = 0;
+  for (const [i, rel] of all.entries()) {
+    progress(i, all.length, rel);
+    const done = await attempt(rel, async () => {
+      if (has(src, rel)) {
+        if (direction === "down") { log("↓ download " + rel); await pull(rel, rel, src[rel].sha); }
+        else { log("↑ upload   " + rel); await push(rel, src[rel]); }
+        state[rel] = src[rel].sha;
+      } else {
+        if (direction === "down") { log("✗ cancella in locale   " + rel); await removeLocal(rel); }
+        else { log("✗ cancella sul server  " + rel); await api("DELETE", "/file", {path: rel}); }
+        delete state[rel];
+      }
+    });
+    if (done) ok++;
+  }
+  return ok;
+}
+
+// stessa logica del client Python: lo stato ricorda l'hash dell'ultima sync
+async function syncBoth(local, remote, state) {
+  const paths = [...new Set([...Object.keys(local), ...Object.keys(remote), ...Object.keys(state)])]
+    .filter(r => !ignored(r)).sort();
+  const diff = [];
+  for (const r of paths) {
+    const ls = get(local, r)?.sha, rs = get(remote, r)?.sha;
+    if (ls !== rs) diff.push(r);
+    else if (ls) state[r] = ls;
+    else delete state[r];
+  }
+  let ok = 0;
+  for (const [i, rel] of diff.entries()) {
+    progress(i, diff.length, rel);
+    const L = get(local, rel), R = get(remote, rel), ls = L?.sha, rs = R?.sha, base = get(state, rel);
+    let final;
+    const done = await attempt(rel, async () => {
+      if (rs === base) {                      // cambiato solo qui
+        if (L) { log("↑ upload   " + rel); await push(rel, L); }
+        else { log("✗ cancella sul server  " + rel); await api("DELETE", "/file", {path: rel}); }
+        final = ls;
+      } else if (ls === base) {               // cambiato solo sul server
+        if (R) { log("↓ download " + rel); await pull(rel, rel, rs); }
+        else { log("✗ cancella in locale   " + rel); await removeLocal(rel); }
+        final = rs;
+      } else if (!R) {                        // cancellato la', modificato qui
+        log("! conflitto (cancellato sul server) -> ricarico " + rel);
+        await push(rel, L); final = ls;
+      } else if (!L) {                        // cancellato qui, modificato la'
+        log("! conflitto (cancellato in locale) -> riscarico " + rel);
+        await pull(rel, rel, rs); final = rs;
+      } else {                                // modificato su entrambi: vince il piu' recente
+        const cname = conflictName(rel);
+        if (L.mtime >= R.mtime) {
+          log("! conflitto " + rel + ": vince questa versione, quella del server -> " + cname);
+          await pull(rel, cname, rs); await push(rel, L); final = ls;
+        } else {
+          log("! conflitto " + rel + ": vince il server, questa versione -> " + cname);
+          await writeFile(cname, L.file); await pull(rel, rel, rs); final = rs;
+        }
+      }
+      if (final) state[rel] = final; else delete state[rel];
+    });
+    if (done) ok++;
+  }
+  return ok;
+}
+
+async function run(action, isAuto) {
+  if (busy) return;
+  auto = !!isAuto;
+  const mirror = action !== "sync" && $("mirror").checked;
+  if (!auto) {
+    try { await ensurePermission(true); }
+    catch (e) { return status("jobStatus", "err", "✗ " + e.message); }
+    if (mirror && !confirm("Modalità specchio: i file che non esistono nella sorgente verranno ELIMINATI "
+        + (action === "down" ? "da questa cartella" : "dal server") + ". Continuare?")) return;
+  } else if (!dir || !(await ensurePermission(false))) return;
+  busy = true; setButtons(); skipped = 0;
+  if (!auto) lastAction = action;
+  status("jobStatus", "", NAMES[action] + " in corso…");
+  try {
+    if (!auto) log("— " + STARTED[action] + " (cartella \"" + dir.name + "\")");
+    cache = await readJSON(CACHE);
+    const state = await readJSON(STATE);
+    gitSkip = rel => false;
+    const mine = new GitIgnore();
+    const local = await scanLocal(mine);
+    const remote = await manifest();
+    // un file escluso da uno qualsiasi dei due lati non viene mai toccato
+    const theirs = GitIgnore.fromManifest(remote);
+    gitSkip = rel => mine.ignored(rel) || theirs.ignored(rel);
+    for (const side of [local, remote])
+      for (const rel of Object.keys(side)) if (gitSkip(rel)) delete side[rel];
+    const n = action === "sync" ? await syncBoth(local, remote, state)
+                                : await oneWay(action, mirror, local, remote, state);
+    await writeFile(STATE, JSON.stringify(state));
+    await writeFile(CACHE, JSON.stringify(cache));
+    let msg = n ? "✓ " + DONE[action] + ": " + n + " file"
+                : skipped ? "✓ Nient'altro da aggiornare" : "✓ Nessuna differenza: tutto già allineato";
+    const nFailed = Object.keys(failed).length;
+    if (nFailed) msg += " · " + nFailed + " file con errori" + (skipped ? " (saltati)" : "");
+    status("jobStatus", nFailed ? "warn" : "ok", msg);
+    if (n || !auto) log(msg);
+  } catch (e) {
+    if (e.message === "token errato") {
+      authFailed = true;
+      e.message = TOKEN_HINT + (auto ? " (sync automatica in pausa)" : "");
+      status("connStatus", "err", "✗ " + TOKEN_HINT);
+    }
+    status("jobStatus", "err", "✗ " + e.message);
+    log("✗ " + e.message);
+  } finally {
+    busy = false; setButtons(); progress(0, 0, "");
+  }
+}
+
+function setButtons() {
+  document.querySelectorAll("[data-action], #pick, #fbUpload, #fbZip, #retryFailed, #clearFailed").forEach(b => b.disabled = busy);
+}
+document.querySelectorAll("[data-action]").forEach(b => b.onclick = () => run(b.dataset.action));
+$("retryFailed").onclick = () => run(lastAction);
+$("clearFailed").onclick = () => { failed = {}; saveFailed(); };
+
+// ------------------------------------------------------------------- token
+async function checkConnection() {
+  if (!token) return status("connStatus", "warn", "Inserisci il token del server.");
+  status("connStatus", "", "Controllo…");
+  try {
+    const files = Object.keys(await manifest()).length;
+    status("connStatus", "ok", "✓ Connesso: " + files + " file sul server");
+  } catch (e) {
+    const bad = e.message === "token errato";
+    if (bad) authFailed = true;
+    status("connStatus", "err", "✗ " + (bad ? TOKEN_HINT : e.message));
+    return;
+  }
+  authFailed = false;
+}
+$("token").value = token;
+$("saveToken").onclick = () => { token = $("token").value.trim(); store.set("token", token); checkConnection(); };
+$("token").onkeydown = e => { if (e.key === "Enter") $("saveToken").click(); };
+
+// ------------------------------------------------------------------- cartella
+function showFolder(perm) {
+  $("folderName").textContent = dir ? "📁 " + dir.name : "Nessuna cartella scelta";
+  $("folderName").classList.toggle("set", !!dir);
+  if (dir && !perm) status("folderStatus", "warn", "Il browser chiederà di nuovo il permesso alla prossima azione.");
+  else status("folderStatus", "", "");
+}
+$("pick").onclick = async () => {
+  try {
+    dir = await window.showDirectoryPicker({id: "syncfolder", mode: "readwrite"});
+    await idb("readwrite", s => s.put(dir, "dir"));
+    cache = {};
+    showFolder(true);
+    log("cartella scelta: " + dir.name);
+  } catch (e) { if (e.name !== "AbortError") status("folderStatus", "err", "✗ " + e.message); }
+};
+
+// ------------------------------------------------------------- sync automatica
+$("auto").checked = store.get("auto") === "1";
+$("interval").value = store.get("interval") || 30;
+$("auto").onchange = () => store.set("auto", $("auto").checked ? "1" : "0");
+$("interval").onchange = () => store.set("interval", $("interval").value);
+let lastAuto = 0;
+setInterval(() => {
+  const every = Math.max(5, Number($("interval").value) || 30) * 1000;
+  if ($("auto").checked && token && !busy && !authFailed && Date.now() - lastAuto >= every) {
+    lastAuto = Date.now();
+    run("sync", true);
+  }
+}, 1000);
+
+// ------------------------------------------- browser senza accesso alle cartelle
+$("fbZip").onclick = async () => {
+  try {
+    const {ticket} = await (await api("POST", "/ticket")).json();
+    location.href = "/zip?" + new URLSearchParams({ticket});
+    status("fbStatus", "ok", "✓ Download dello zip avviato");
+  } catch (e) { status("fbStatus", "err", "✗ " + e.message); }
+};
+$("fbUpload").onclick = () => $("fbInput").click();
+$("fbInput").onchange = async () => {
+  const files = [...$("fbInput").files];
+  $("fbInput").value = "";
+  if (!files.length) return;
+  busy = true; setButtons();
+  try {
+    const remote = await manifest();
+    const relOf = f => f.webkitRelativePath.split("/").slice(1).join("/");  // senza il nome della cartella
+    const mine = new GitIgnore(), theirs = GitIgnore.fromManifest(remote);
+    for (const f of files) {
+      const rel = relOf(f);
+      if (rel === ".gitignore" || rel.endsWith("/.gitignore"))
+        mine.add(rel.slice(0, Math.max(0, rel.lastIndexOf("/"))), await f.text());
+    }
+    gitSkip = rel => mine.ignored(rel) || theirs.ignored(rel);
+    let done = 0, sent = 0;
+    for (const f of files) {
+      const rel = relOf(f);
+      $("fbBar").style.width = Math.round(100 * done++ / files.length) + "%";
+      if (!rel || ignored(rel) || rel.split("/").some(p => p.startsWith(".sync"))) continue;
+      status("fbStatus", "", "Controllo " + rel);
+      const sha = await sha256(f);
+      if (get(remote, rel)?.sha === sha) continue;
+      log("↑ upload   " + rel);
+      try { await push(rel, {file: f, mtime: f.lastModified / 1000, sha}); sent++; }
+      catch (e) { if (e.message === "token errato") throw e; log("errore su " + rel + ": " + e.message); }
+    }
+    status("fbStatus", "ok", sent ? "✓ Caricati " + sent + " file" : "✓ Nessuna differenza: tutto già sul server");
+    log("✓ Caricati " + sent + " file");
+  } catch (e) { status("fbStatus", "err", "✗ " + e.message); }
+  finally { busy = false; setButtons(); $("fbBar").style.width = "0"; }
+};
+
+// --------------------------------------------------------------------- avvio
+(async () => {
+  if (!supported) {
+    $("fullCard").classList.add("hidden");
+    $("actionsCard").classList.add("hidden");
+    $("fallbackCard").classList.remove("hidden");
+  } else {
+    try {
+      dir = (await idb("readonly", s => s.get("dir"))) || null;
+      showFolder(dir && await ensurePermission(false));
+    } catch { dir = null; }
+  }
+  saveFailed();
+  checkConnection();
+})();
+</script></body></html>
