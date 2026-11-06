@@ -6,7 +6,7 @@ Solo Python standard sul server (3.8+), nessuna dipendenza. Sull'altro PC basta 
 ```
 PC B (browser)  ──HTTPS──>  Cloudflare  ──tunnel──>  PC A  localhost:8080
  cartella scelta                                       server + pagina web
- nella pagina                                          ~/Sync
+ nella pagina                                          ./Sync
 ```
 
 ## File
@@ -17,7 +17,7 @@ PC B (browser)  ──HTTPS──>  Cloudflare  ──tunnel──>  PC A  local
 ## 1. PC A — server
 
 ```bash
-python3 syncfolder.py server --dir ~/Sync --tunnel
+python3 syncfolder.py server --dir ./Sync --tunnel
 ```
 
 All'avvio il server:
@@ -110,7 +110,7 @@ Se cambi un `.gitignore`, i file che prima erano esclusi e ora non lo sono più 
 Se sul PC B preferisci uno script invece del browser (serve solo `syncfolder.py`):
 
 ```bash
-python3 syncfolder.py client --dir ~/Sync --url https://sync.tuodominio.com --token TOKEN_DEL_SERVER --interval 10
+python3 syncfolder.py client --dir ./Sync --url https://sync.tuodominio.com --token TOKEN_DEL_SERVER --interval 10
 ```
 
 `TOKEN_DEL_SERVER` è la parte dopo `#token=` del link di accesso (cambia a ogni avvio del server, a meno di usare `--token` anche sul server).
