@@ -54,6 +54,11 @@ Apri l'indirizzo del tunnel (es. `https://sync.tuodominio.com`) con **Chrome o E
    - **⬇ Scarica**: copia dal server alla cartella i file nuovi o diversi
    - **⬆ Carica**: copia dalla cartella al server i file nuovi o diversi
    - **⇅ Sincronizza**: aggiorna nei due sensi, con cancellazioni e conflitti (vedi sotto)
+   - **🔍 Confronta**: confronta cartella e server file per file (solo in locale, solo sul server,
+     diverso) e mostra il risultato come albero di cartelle, senza copiare né cancellare niente.
+     Con **Mostra tutti i file** compaiono anche quelli uguali. Spunta file o cartelle e usa
+     **Scarica selezionati** / **Carica selezionati** per trasferire solo quelli: gli altri restano
+     come sono e non viene mai cancellato niente, anche con Specchio attivo
    - **Specchio**: con Scarica/Carica elimina anche, sulla destinazione, i file che nella sorgente non ci sono (chiede conferma)
    - **Sincronizza automaticamente**: ripete la sincronizzazione ogni N secondi finché la pagina è aperta
 

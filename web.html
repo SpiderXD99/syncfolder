@@ -21,9 +21,10 @@ button{font:inherit;padding:9px 14px;border-radius:8px;border:1px solid var(--li
 button:hover{border-color:var(--accent)}
 button:disabled{opacity:.5;cursor:default}
 button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
-.actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.actions{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .actions button{padding:14px 10px;font-size:15px}
 .actions small{display:block;font-size:12px;opacity:.75;margin-top:2px;white-space:normal}
+@media (max-width:720px){.actions{grid-template-columns:repeat(2,1fr)}}
 @media (max-width:560px){.actions{grid-template-columns:1fr}}
 .check{display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px}
 .status{margin-top:8px;font-size:14px;min-height:20px}
@@ -36,9 +37,20 @@ button.primary{background:var(--accent);border-color:var(--accent);color:var(--a
 pre{background:var(--log);color:var(--log-fg);border-radius:8px;padding:12px;height:240px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0;white-space:pre-wrap;word-break:break-all}
 .hidden{display:none}
 .note{font-size:14px;color:var(--muted);margin:0 0 12px}
-#failedList{list-style:none;margin:0 0 12px;padding:0;max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:8px}
-#failedList li{padding:6px 10px;border-bottom:1px solid var(--line);font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
-#failedList li span{color:var(--err);display:block}
+.files{list-style:none;margin:0 0 12px;padding:0;max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.files li{padding:6px 10px;border-bottom:1px solid var(--line);font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+.files li span{color:var(--muted);display:block}
+#failedList li span{color:var(--err)}
+#diffTree{max-height:440px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px 10px;margin-bottom:12px;font:12px/1.6 ui-monospace,Menlo,Consolas,monospace}
+#diffTree details>div{margin-left:16px}
+#diffTree summary{cursor:pointer;word-break:break-all}
+#diffTree summary small{color:var(--muted);margin-left:6px}
+#diffTree input{margin:0 4px 0 0;vertical-align:-1px}
+.node{display:block;word-break:break-all}
+.node small{color:var(--muted);margin-left:6px}
+.node.changed small{color:var(--warn)}
+.node.same{color:var(--muted)}
+.wrap{flex-wrap:wrap}
 </style></head><body><main>
 <h1>syncfolder</h1>
 <p class="sub">Scambia i file tra una cartella di questo computer e il server.</p>
@@ -61,6 +73,7 @@ pre{background:var(--log);color:var(--log-fg);border-radius:8px;padding:12px;hei
     <button class="primary" data-action="down">⬇ Scarica<small>dal server alla cartella</small></button>
     <button class="primary" data-action="up">⬆ Carica<small>dalla cartella al server</small></button>
     <button data-action="sync">⇅ Sincronizza<small>in entrambe le direzioni</small></button>
+    <button data-action="check">🔍 Confronta<small>mostra le differenze, senza copiare</small></button>
   </div>
   <label class="check"><input type="checkbox" id="mirror"> Specchio: elimina sulla destinazione i file che non ci sono nella sorgente</label>
   <label class="check"><input type="checkbox" id="auto"> Sincronizza automaticamente ogni
@@ -74,8 +87,22 @@ pre{background:var(--log);color:var(--log-fg);border-radius:8px;padding:12px;hei
   <h2>File con errori (<span id="failedCount">0</span>)</h2>
   <p class="note">La sincronizzazione automatica li salta per non ripetere l'errore all'infinito.
     I pulsanti Scarica / Carica / Sincronizza li riprovano.</p>
-  <ul id="failedList"></ul>
+  <ul id="failedList" class="files"></ul>
   <div class="row"><button class="primary" id="retryFailed">Riprova ora</button><button id="clearFailed">Svuota lista</button></div>
+</div>
+
+<div class="card hidden" id="diffCard">
+  <h2>Differenze (<span id="diffCount">0</span>)</h2>
+  <p class="note" id="diffNote"></p>
+  <label class="check" style="margin:0 0 12px"><input type="checkbox" id="diffAll"> Mostra tutti i file (anche quelli uguali)</label>
+  <div id="diffTree"></div>
+  <div class="row wrap">
+    <button class="primary" id="diffDown"></button>
+    <button class="primary" id="diffUp"></button>
+    <button id="diffSelAll">Seleziona tutto</button>
+    <button id="diffSelNone">Deseleziona tutto</button>
+    <button id="clearDiff">Chiudi</button>
+  </div>
 </div>
 
 <div class="card hidden" id="fallbackCard">
@@ -101,9 +128,10 @@ const $ = id => document.getElementById(id);
 const CHUNK = 32 * 1024 * 1024;          // Cloudflare free: max 100 MB per richiesta
 const STATE = ".syncstate.json", CACHE = ".synccache.json";
 const IGNORED = new Set([STATE, CACHE, ".DS_Store", "Thumbs.db", "desktop.ini"]);
-const NAMES = {down: "Download", up: "Upload", sync: "Sincronizzazione"};
+const NAMES = {down: "Download", up: "Upload", sync: "Sincronizzazione", check: "Confronto"};
 const DONE = {down: "Download completato", up: "Upload completato", sync: "Sincronizzazione completata"};
-const STARTED = {down: "Download avviato", up: "Upload avviato", sync: "Sincronizzazione avviata"};
+const STARTED = {down: "Download avviato", up: "Upload avviato", sync: "Sincronizzazione avviata",
+                 check: "Confronto avviato"};
 const supported = "showDirectoryPicker" in window;
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const get = (o, k) => has(o, k) ? o[k] : undefined;
@@ -216,6 +244,7 @@ let authFailed = false;  // token rifiutato: la sync automatica resta in pausa
 const TOKEN_HINT = "token non valido: il server è stato riavviato? Apri il nuovo link di accesso";
 let auto = false;    // true durante la sincronizzazione automatica
 let lastAction = "sync";
+let lastOnly = null;  // i file selezionati nell'ultima operazione (null = tutti)
 // file che hanno dato errore: rel -> messaggio. La sync automatica li salta.
 let failed = {};
 try { failed = JSON.parse(store.get("failed") || "{}"); } catch {}
@@ -445,12 +474,15 @@ function conflictName(rel) {
 }
 
 // ------------------------------------------------------------------- operazioni
-async function oneWay(direction, mirror, local, remote, state) {
+// only: copia solo questi file (Set). Quelli diversi non selezionati restano fuori
+// anche dallo stato, altrimenti risulterebbero già sincronizzati.
+async function oneWay(direction, mirror, local, remote, state, only) {
   const [src, dst] = direction === "down" ? [remote, local] : [local, remote];
-  const todo = Object.keys(src).filter(r => src[r].sha !== get(dst, r)?.sha).sort();
+  const diff = Object.keys(src).filter(r => src[r].sha !== get(dst, r)?.sha).sort();
   const extra = mirror ? Object.keys(dst).filter(r => !has(src, r)).sort() : [];
-  const todoSet = new Set(todo);
-  for (const r of Object.keys(src)) if (!todoSet.has(r)) state[r] = src[r].sha;
+  const diffSet = new Set(diff);
+  for (const r of Object.keys(src)) if (!diffSet.has(r)) state[r] = src[r].sha;
+  const todo = only ? diff.filter(r => only.has(r)) : diff;
   const all = todo.concat(extra);
   let ok = 0;
   for (const [i, rel] of all.entries()) {
@@ -519,10 +551,125 @@ async function syncBoth(local, remote, state) {
   return ok;
 }
 
-async function run(action, isAuto) {
+// Confronta: cartella e server file per file, senza toccare niente
+let diffRows = [];  // [rel, tipo (same/changed/local/remote), icona, descrizione]
+let diffSel = new Set();   // file selezionati
+let diffOpen = new Set();  // cartelle aperte, per non richiuderle a ogni aggiornamento
+let diffChecks = [];       // [casella, file che comanda]
+function compare(local, remote) {
+  diffRows = [...new Set([...Object.keys(local), ...Object.keys(remote)])].sort().map(r => {
+    const L = get(local, r), R = get(remote, r);
+    if (!R) return [r, "local", "+", "solo in locale"];
+    if (!L) return [r, "remote", "+", "solo sul server"];
+    if (L.sha === R.sha) return [r, "same", "=", "uguale"];
+    return [r, "changed", "≠", "diverso (più recente: " + (L.mtime >= R.mtime ? "locale" : "server") + ")"];
+  });
+  const differing = diffRows.filter(row => row[1] !== "same");
+  const keep = new Set(differing.map(row => row[0]));
+  diffSel = new Set([...diffSel].filter(r => keep.has(r)));
+  $("diffCard").classList.remove("hidden");
+  $("diffCount").textContent = differing.length;
+  $("diffNote").textContent = (diffRows.length - differing.length) + " file uguali · "
+    + Object.keys(local).length + " file in locale · " + Object.keys(remote).length + " file sul server";
+  showDiff();
+  return differing.length;
+}
+function diffTreeOf(rows) {
+  const root = {dirs: new Map(), files: [], rels: []};
+  for (const row of rows) {
+    const parts = row[0].split("/"), file = parts.pop();
+    let node = root, path = "";
+    if (row[1] !== "same") root.rels.push(row[0]);
+    for (const p of parts) {
+      path += (path ? "/" : "") + p;
+      if (!node.dirs.has(p)) node.dirs.set(p, {name: p, path, dirs: new Map(), files: [], rels: [], total: 0});
+      node = node.dirs.get(p);
+      node.total++;
+      if (row[1] !== "same") node.rels.push(row[0]);
+    }
+    node.files.push([file, row]);
+  }
+  return root;
+}
+function diffCheck(rels) {
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.onchange = () => {
+    for (const r of rels) if (cb.checked) diffSel.add(r); else diffSel.delete(r);
+    showChecks();
+  };
+  diffChecks.push([cb, rels]);
+  return cb;
+}
+function diffNodes(node, openAll) {
+  const out = [];
+  for (let d of [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+    let name = d.name;
+    // le catene di cartelle con una sola sottocartella (es. i package Java) stanno su una riga
+    while (d.dirs.size === 1 && !d.files.length) {
+      d = [...d.dirs.values()][0];
+      name += "/" + d.name;
+    }
+    const det = document.createElement("details"), sum = document.createElement("summary");
+    const count = document.createElement("small"), kids = document.createElement("div");
+    const path = d.path;
+    if (d.rels.length) sum.appendChild(diffCheck(d.rels));
+    sum.append("📁 " + name);
+    count.textContent = d.rels.length ? d.rels.length + " diversi su " + d.total : d.total + " uguali";
+    sum.appendChild(count);
+    kids.append(...diffNodes(d, openAll));
+    det.append(sum, kids);
+    det.open = openAll || diffOpen.has(path);
+    det.ontoggle = () => { if (det.open) diffOpen.add(path); else diffOpen.delete(path); };
+    out.push(det);
+  }
+  for (const [file, [rel, type, icon, what]] of node.files) {
+    const row = document.createElement(type === "same" ? "div" : "label");
+    const info = document.createElement("small");
+    row.className = "node " + type;
+    if (type !== "same") row.appendChild(diffCheck([rel]));
+    row.append(icon + " " + file);
+    info.textContent = what;
+    row.appendChild(info);
+    out.push(row);
+  }
+  return out;
+}
+function showDiff() {
+  const all = $("diffAll").checked;
+  const rows = diffRows.filter(row => all || row[1] !== "same");
+  diffChecks = [];
+  $("diffTree").replaceChildren(...diffNodes(diffTreeOf(rows), rows.length <= 100));
+  showChecks();
+}
+function selectedFor(action) {
+  const skip = action === "down" ? "local" : "remote";  // quel file non esiste nella sorgente
+  return new Set(diffRows.filter(row => row[1] !== "same" && row[1] !== skip && diffSel.has(row[0]))
+    .map(row => row[0]));
+}
+function showChecks() {
+  for (const [cb, rels] of diffChecks) {
+    const n = rels.filter(r => diffSel.has(r)).length;
+    cb.checked = n === rels.length;
+    cb.indeterminate = n > 0 && n < rels.length;
+  }
+  const down = selectedFor("down").size, up = selectedFor("up").size;
+  $("diffDown").textContent = "⬇ Scarica selezionati (" + down + ")";
+  $("diffUp").textContent = "⬆ Carica selezionati (" + up + ")";
+  $("diffDown").disabled = busy || !down;
+  $("diffUp").disabled = busy || !up;
+}
+async function transferSelected(action) {
+  const only = selectedFor(action);
+  if (!only.size) return;
+  await run(action, false, only);
+  await run("check");  // aggiorna l'albero
+}
+
+async function run(action, isAuto, only = null) {
   if (busy) return;
   auto = !!isAuto;
-  const mirror = action !== "sync" && $("mirror").checked;
+  const mirror = !only && (action === "down" || action === "up") && $("mirror").checked;
   if (!auto) {
     try { await ensurePermission(true); }
     catch (e) { return status("jobStatus", "err", "✗ " + e.message); }
@@ -530,7 +677,7 @@ async function run(action, isAuto) {
         + (action === "down" ? "da questa cartella" : "dal server") + ". Continuare?")) return;
   } else if (!dir || !(await ensurePermission(false))) return;
   busy = true; setButtons(); skipped = 0;
-  if (!auto) lastAction = action;
+  if (!auto && action !== "check") { lastAction = action; lastOnly = only; }
   status("jobStatus", "", NAMES[action] + " in corso…");
   try {
     if (!auto) log("— " + STARTED[action] + " (cartella \"" + dir.name + "\")");
@@ -545,8 +692,16 @@ async function run(action, isAuto) {
     gitSkip = rel => mine.ignored(rel) || theirs.ignored(rel);
     for (const side of [local, remote])
       for (const rel of Object.keys(side)) if (gitSkip(rel)) delete side[rel];
+    if (action === "check") {
+      const n = compare(local, remote);
+      await writeFile(CACHE, JSON.stringify(cache));  // solo la cache delle impronte
+      const msg = n ? "Confronto: " + n + " file diversi" : "✓ Nessuna differenza: tutto già allineato";
+      status("jobStatus", n ? "warn" : "ok", msg);
+      log(msg);
+      return;
+    }
     const n = action === "sync" ? await syncBoth(local, remote, state)
-                                : await oneWay(action, mirror, local, remote, state);
+                                : await oneWay(action, mirror, local, remote, state, only);
     await writeFile(STATE, JSON.stringify(state));
     await writeFile(CACHE, JSON.stringify(cache));
     let msg = n ? "✓ " + DONE[action] + ": " + n + " file"
@@ -570,9 +725,20 @@ async function run(action, isAuto) {
 
 function setButtons() {
   document.querySelectorAll("[data-action], #pick, #fbUpload, #fbZip, #retryFailed, #clearFailed").forEach(b => b.disabled = busy);
+  showChecks();
 }
+$("clearDiff").onclick = () => $("diffCard").classList.add("hidden");
+$("diffDown").onclick = () => transferSelected("down");
+$("diffUp").onclick = () => transferSelected("up");
+$("diffSelAll").onclick = () => {
+  for (const row of diffRows) if (row[1] !== "same") diffSel.add(row[0]);
+  showChecks();
+};
+$("diffSelNone").onclick = () => { diffSel.clear(); showChecks(); };
+$("diffAll").checked = store.get("diffAll") === "1";
+$("diffAll").onchange = () => { store.set("diffAll", $("diffAll").checked ? "1" : "0"); showDiff(); };
 document.querySelectorAll("[data-action]").forEach(b => b.onclick = () => run(b.dataset.action));
-$("retryFailed").onclick = () => run(lastAction);
+$("retryFailed").onclick = () => run(lastAction, false, lastOnly);
 $("clearFailed").onclick = () => { failed = {}; saveFailed(); };
 
 // ------------------------------------------------------------------- token

@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
+python3 syncfolder.py server --dir ./Sync --tunnel
 syncfolder - sincronizzazione bidirezionale di una cartella tra 2 PC via HTTP.
 
 Solo libreria standard Python (3.8+), nessuna dipendenza.
 
   PC A (server + tunnel Cloudflare, stampa l'indirizzo pubblico):
-      python3 syncfolder.py server --dir ~/Sync --tunnel
+      python3 syncfolder.py server --dir ./Sync --tunnel
 
-  PC B:
-      python3 syncfolder.py client --dir ~/Sync --token SEGRETO \
-          --url https://sync.tuodominio.com --interval 10
 
 Il server espone la sua cartella; il client confronta periodicamente la propria
 con quella del server e propaga modifiche, nuovi file e cancellazioni in
@@ -185,6 +183,7 @@ class Scanner:
         self.cache = {}  # rel -> (size, mtime_ns, sha)
         self.lock = threading.Lock()
         self.gitignore = GitIgnore()
+        self.unreadable = set()  # file non leggibili gia' segnalati nel log
 
     def scan(self):
         with self.lock:
@@ -193,13 +192,15 @@ class Scanner:
     def _scan(self):
         result = {}
         self.gitignore = gi = GitIgnore()
+        unreadable = set()
         for dirpath, dirnames, filenames in os.walk(self.root):
             base = os.path.relpath(dirpath, self.root).replace(os.sep, "/")
             base = "" if base == "." else base
             prefix = base + "/" if base else ""
             if GITIGNORE in filenames:
                 try:
-                    with open(os.path.join(dirpath, GITIGNORE), encoding="utf-8",
+                    # utf-8-sig: toglie il BOM, come file.text() nella pagina
+                    with open(os.path.join(dirpath, GITIGNORE), encoding="utf-8-sig",
                               errors="replace") as f:
                         gi.add(base, f.read())
                 except OSError:
@@ -219,17 +220,23 @@ class Scanner:
                     else:
                         sha = sha256_file(full)
                         self.cache[rel] = (st.st_size, st.st_mtime_ns, sha)
-                except OSError:
-                    continue  # file sparito o bloccato durante la scansione
+                except OSError as e:
+                    # file sparito o bloccato durante la scansione: per l'altro
+                    # lato non esiste, quindi lo segnaliamo (una volta sola)
+                    if rel not in self.unreadable:
+                        log("non riesco a leggere %s, lo salto: %s" % (rel, e))
+                    unreadable.add(rel)
+                    continue
                 result[rel] = {"size": st.st_size, "mtime": st.st_mtime, "sha": sha}
                 if name == GITIGNORE and base in gi.rules:
                     # l'altro lato usa anche queste regole, per non toccare mai
                     # file che uno dei due lati ignora
-                    with open(full, encoding="utf-8", errors="replace") as f:
+                    with open(full, encoding="utf-8-sig", errors="replace") as f:
                         result[rel]["gitignore"] = f.read()
         for rel in list(self.cache):
             if rel not in result:
                 del self.cache[rel]
+        self.unreadable = unreadable
         return result
 
 
@@ -452,6 +459,17 @@ def run_tunnel(port, token, stop):
             stop.wait(5)
 
 
+class SyncServer(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # il client ha chiuso a meta' risposta (pagina ricaricata, rete, tunnel):
+        # non e' un errore del server, basta una riga invece del traceback
+        err = sys.exc_info()[1]
+        if isinstance(err, ConnectionError):
+            log("connessione chiusa dal client durante la risposta: %s" % err)
+        else:
+            super().handle_error(request, client_address)
+
+
 def run_server(args):
     if not args.token:
         # nuovo a ogni avvio: i link degli avvii precedenti smettono di funzionare
@@ -463,7 +481,7 @@ def run_server(args):
     root = os.path.realpath(os.path.expanduser(args.dir))
     os.makedirs(root, exist_ok=True)
     handler = make_handler(root, args.token, Scanner(root))
-    httpd = ThreadingHTTPServer((args.host, args.port), handler)
+    httpd = SyncServer((args.host, args.port), handler)
     log("server in ascolto su http://%s:%d  cartella: %s" % (args.host, args.port, root))
     stop = threading.Event()
     stop.proc = None
